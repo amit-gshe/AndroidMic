@@ -435,13 +435,12 @@ impl Application for AppState {
         info!("config path: {}", flags.config_path);
         info!("log path: {}", flags.log_path);
 
-        #[cfg(not(target_os = "linux"))]
+        // Linux has no system tray, but the systemd service should still start silently:
+        // the main window is created only when start_minimized is false, and can be
+        // brought up later by running the app again (single-instance IPC Show event).
         if !flags.launched_automatically || !app.config.data().start_minimized {
             commands.push(app.open_main_window());
         }
-
-        #[cfg(target_os = "linux")]
-        commands.push(app.open_main_window());
 
         match single_instance::stream() {
             Ok(stream) => {
@@ -924,6 +923,10 @@ impl Application for AppState {
             #[cfg(not(target_os = "linux"))]
             return Some(AppMsg::HideWindow);
 
+            // On Linux iced/winit cannot keep the event loop alive after a window is
+            // destroyed (State::synchronize calls surface_size on the dead window and
+            // panics), so keep the upstream behavior: closing the window exits the app.
+            // The systemd service restarts it back into the background.
             #[cfg(target_os = "linux")]
             return Some(AppMsg::Exit);
         }

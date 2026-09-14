@@ -4,7 +4,8 @@
 use android_mic::{localize, single_instance};
 use chrono::Local;
 use std::io::Write;
-use std::{fs::File, path::Path};
+use std::fs::{File, OpenOptions};
+use std::path::Path;
 
 use android_mic::config::{Args, Config};
 use android_mic::ui::app::run_ui;
@@ -51,7 +52,21 @@ fn main() {
     let log_file_path = log_path.join(format!("{}.log", APP));
 
     // setup log file
-    let target = Box::new(File::create(log_file_path.clone()).expect("Can't create log file"));
+    // The service runs for a long time, so append to keep its history; truncate and
+    // start over once the file exceeds the limit to avoid unbounded growth
+    const MAX_LOG_SIZE: u64 = 8 * 1024 * 1024;
+    let too_big = std::fs::metadata(&log_file_path)
+        .map(|meta| meta.len() > MAX_LOG_SIZE)
+        .unwrap_or(false);
+    let target = Box::new(if too_big {
+        File::create(log_file_path.clone())
+    } else {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file_path.clone())
+    }
+    .expect("Can't create log file"));
     env_logger::Builder::new()
         .format(|buf, record| {
             writeln!(
