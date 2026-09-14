@@ -1,0 +1,102 @@
+name: Release (Linux x86_64)
+
+# Fork-only workflow: builds just the RustApp binary for Linux x86_64 and
+# publishes it as a release. Triggered by pushing a tag (e.g. v2.2.9-headless.1).
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: x86_64-unknown-linux-gnu
+
+jobs:
+  get-version:
+    name: Read version from Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Extract version
+        id: get_version
+        run: |
+          VERSION=$(grep '^version' ./RustApp/Cargo.toml | head -n 1 | awk -F '"' '{print $2}')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build-linux-x86-64:
+    name: Build RustApp (Linux x86_64)
+    needs: get-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # `just` exports ANDROID_MIC_COMMIT, which the app reads via env!("ANDROID_MIC_COMMIT")
+      - uses: taiki-e/install-action@just
+
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev libpipewire-0.3-dev libpulse-dev libxkbcommon-dev protobuf-compiler
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ env.TARGET }}
+          rustup component add rust-src --toolchain stable
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./RustApp -> target"
+
+      - name: Build release binary
+        working-directory: ./RustApp
+        run: just build-release --target ${{ env.TARGET }}
+
+      - name: Prepare release asset
+        working-directory: ./RustApp
+        run: |
+          set -euo pipefail
+          BIN="target/${{ env.TARGET }}/release/android-mic"
+          test -x "$BIN"
+          ASSET="android-mic-${{ needs.get-version.outputs.version }}-linux-x86_64"
+          install -Dm755 "$BIN" "$GITHUB_WORKSPACE/$ASSET"
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          generate_release_notes: true
+          files: android-mic-*
+          body: |
+            Linux x86_64 build of RustApp (version ${{ needs.get-version.outputs.version }}),
+            built from tag `${{ github.ref_name }}`.
+
+            ### Install
+
+            ```bash
+            install -Dm755 android-mic-*-linux-x86_64 ~/.local/bin/android-mic
+            ```
+
+            ### Changes in this fork
+
+            - Linux honors `start_minimized`, so `--launched-automatically`
+              (used by a systemd user service) starts without opening a window
+            - The log file is appended to (truncated only past 8 MiB) instead
+              of being truncated on every start
