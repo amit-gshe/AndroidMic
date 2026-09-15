@@ -15,26 +15,30 @@ pub fn create_audio_stream(
     let sample_rate = config.sample_rate.to_number();
     let mut channel_count = config.channel_count.to_number();
 
-    // check if config is supported by device
-    let supported_configs = device.supported_output_configs()?;
-
+    // The advertised configs are only a hint, `build_output_stream` is what actually
+    // decides: some backends (notably cpal's PipeWire host) advertise the graph rate as
+    // an exact range (min == max) even though the server resamples any rate a client
+    // asks for. So this list is used to pick the channel count and buffer size, while a
+    // sample rate missing from it is not fatal.
     let mut matched_config = None;
-    for supported_config in supported_configs {
-        if audio_format == supported_config.sample_format()
-            && supported_config.max_sample_rate() >= sample_rate
+    let mut rate_advertised = true;
+    for supported_config in device.supported_output_configs()? {
+        if audio_format != supported_config.sample_format() {
+            continue;
+        }
+
+        if supported_config.max_sample_rate() >= sample_rate
             && supported_config.min_sample_rate() <= sample_rate
         {
-            // use recommended channel count
-            if supported_config.channels() != channel_count {
-                warn!(
-                    "Using channel count {} instead of {}",
-                    supported_config.channels(),
-                    channel_count
-                );
-                channel_count = supported_config.channels();
-            }
             matched_config = Some(supported_config);
+            rate_advertised = true;
             break;
+        }
+
+        // remember the first format-compatible config as a fallback
+        if matched_config.is_none() {
+            matched_config = Some(supported_config);
+            rate_advertised = false;
         }
     }
 
@@ -43,6 +47,22 @@ pub fn create_audio_stream(
             "Unsupported output audio format or sample rate. Please apply recommended format from settings page."
         );
     };
+
+    if !rate_advertised {
+        warn!(
+            "Audio device does not advertise sample rate {sample_rate}; requesting it anyway and letting the backend resample or reject it"
+        );
+    }
+
+    // use recommended channel count
+    if matched_config.channels() != channel_count {
+        warn!(
+            "Using channel count {} instead of {}",
+            matched_config.channels(),
+            channel_count
+        );
+        channel_count = matched_config.channels();
+    }
 
     let config = cpal::StreamConfig {
         channels: channel_count,
@@ -57,7 +77,17 @@ pub fn create_audio_stream(
         AudioFormat::I32 => build_output_stream::<i32>(device, config, consumer),
         AudioFormat::U8 => build_output_stream::<u8>(device, config, consumer),
         AudioFormat::F32 => build_output_stream::<f32>(device, config, consumer),
-    }?;
+    }
+    .map_err(|e| {
+        // the rate was not advertised, so an unsupported format is the likely cause
+        if rate_advertised {
+            anyhow::Error::new(e)
+        } else {
+            anyhow::anyhow!(
+                "Unsupported output audio format or sample rate: {e}. Please apply recommended format from settings page."
+            )
+        }
+    })?;
 
     // convert stream config to AudioPacketFormat
     let config = AudioPacketFormat {
