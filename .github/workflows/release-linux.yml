@@ -100,3 +100,6 @@ jobs:
               (used by a systemd user service) starts without opening a window
             - The log file is appended to (truncated only past 8 MiB) instead
               of being truncated on every start
+            - Audio devices no longer have to advertise the configured sample
+              rate, so rates other than 48000 (e.g. 8000) work instead of
+              failing with "Unsupported output audio format or sample rate"
