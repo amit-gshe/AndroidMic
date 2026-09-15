@@ -3,8 +3,8 @@
 
 use android_mic::{localize, single_instance};
 use chrono::Local;
-use std::io::Write;
 use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::Path;
 
 use android_mic::config::{Args, Config};
@@ -58,15 +58,17 @@ fn main() {
     let too_big = std::fs::metadata(&log_file_path)
         .map(|meta| meta.len() > MAX_LOG_SIZE)
         .unwrap_or(false);
-    let target = Box::new(if too_big {
-        File::create(log_file_path.clone())
-    } else {
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_file_path.clone())
-    }
-    .expect("Can't create log file"));
+    let target = Box::new(
+        if too_big {
+            File::create(log_file_path.clone())
+        } else {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_file_path.clone())
+        }
+        .expect("Can't create log file"),
+    );
     env_logger::Builder::new()
         .format(|buf, record| {
             writeln!(
